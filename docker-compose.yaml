@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: coupon-mysql
+    ports:
+      - "3306:3306"
+    environment:
+        MYSQL_DATABASE: coupon_db
+        MYSQL_ROOT_PASSWORD: root
+        TZ: Asia/Seoul
+    command:
+        - --character-set-server=utf8mb4
+        - --collation-server=utf8mb4_unicode_ci
+    volumes:
+        - ./mysql/data:/var/lib/mysql
+    networks:
+        - coupon-network

@@ -11,6 +11,7 @@ import java.time.LocalDateTime;
 @Entity
 @Getter
 @NoArgsConstructor
+@Table(name = "coupon_usage_history")
 public class CouponUsageHistory {
 
     @Id

@@ -13,6 +13,7 @@ import java.time.LocalDateTime;
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
+@Table(name = "coupon")
 public class Coupon {
 
     @Id
@@ -34,6 +35,7 @@ public class Coupon {
 
     private CouponStatus couponStatus;
 
+    private Integer discountAmount;
 
     @Builder
     public Coupon(String name, CouponType couponType, Integer totalQuantity, LocalDateTime startDate, LocalDateTime endDate) {
@@ -44,16 +46,6 @@ public class Coupon {
         this.couponStatus = CouponStatus.ACTIVE;
         this.startDate = startDate;
         this.endDate = endDate;
-    }
-
-    // 비즈니스 로직: 수량 증가
-    public void incrementIssuedQuantity() {
-        this.issuedQuantity++;
-    }
-
-    // 발급 가능 여부 확인
-    public boolean isAvailable() {
-        LocalDateTime now = LocalDateTime.now();
-        return now.isAfter(startDate) && now.isBefore(endDate) && issuedQuantity < totalQuantity;
+        this.discountAmount = 0;
     }
 }

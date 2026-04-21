@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: coupon-issue-system
+
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/coupon_db?useSSL=false&serverTimezone=Asia/Seoul&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
+    username: root
+    password: root
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        highlight_sql: true
+        default_batch_fetch_size: 100
+
+    database-platform: org.hibernate.dialect.MySQL8Dialect
+    generate-ddl: true
+
+logging:
+  level:
+    org.hibernate.orm.jdbc.bind: trace
