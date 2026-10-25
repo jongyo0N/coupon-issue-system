@@ -48,4 +48,25 @@ public class Coupon {
         this.endDate = endDate;
         this.discountAmount = 0;
     }
+
+    public void isIssuable(){
+
+        LocalDateTime now = LocalDateTime.now();
+
+        if(this.couponStatus != CouponStatus.ACTIVE){
+            throw new RuntimeException("현재 발급 불가능한 쿠폰입니다.");
+        }
+
+        if(this.issuedQuantity >= this.totalQuantity){
+            throw new RuntimeException("선착순 수량이 모두 매진되었습니다.");
+        }
+    }
+
+    public void increaseIssuedQuantity(){
+
+        if(this.getIssuedQuantity() >= this.getTotalQuantity()){
+            throw new RuntimeException("수량 초과");
+        }
+        this.issuedQuantity++;
+    }
 }
