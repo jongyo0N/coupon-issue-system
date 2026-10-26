@@ -9,6 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.CannotAcquireLockException;
 
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -17,7 +18,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -28,18 +31,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * - 락 미적용: 일반 SELECT 는 행을 잠그지 않으므로 lost update / 초과 발급 발생
  * - 비관적 락: SELECT ... FOR UPDATE 로 조회 시점부터 행을 잠가 정확히 100장만 발급
  * */
-@SpringBootTest(properties = {
-        "spring.jpa.show-sql=false",                      // 1000건 요청 시 SQL 로그 폭주 방지
-        "logging.level.org.hibernate.orm.jdbc.bind=info"
-})
+@SpringBootTest
 class CouponIssueConcurrencyTest {
 
     private static final int TOTAL_QUANTITY = 100;  // 선착순 수량
-    private static final int THREAD_COUNT = 1000;   // 동시 요청 수
+    private static final int THREAD_COUNT = 10000;   // 동시 요청 수
     private static final int POOL_SIZE = 32;        // 동시 실행 스레드 수
 
     @Autowired
     private CouponIssueService couponIssueService;
+
+    @Autowired
+    private CouponRedisIssueService couponRedisIssueService;
 
     @Autowired
     private CouponRepository couponRepository;
@@ -66,7 +69,7 @@ class CouponIssueConcurrencyTest {
     }
 
     @Test
-    @DisplayName("락 미적용: 1000명 동시 요청 시 정합성이 깨진다 (lost update / 초과 발급)")
+    @DisplayName("락 미적용 (lost update / 초과 발급)")
     void issueWithoutLock_concurrency() throws InterruptedException {
 
         IssueResult result = runConcurrently((couponId, userId) ->
@@ -89,7 +92,7 @@ class CouponIssueConcurrencyTest {
     }
 
     @Test
-    @DisplayName("비관적 락 적용: 1000명 동시 요청에도 정확히 100장만 발급된다")
+    @DisplayName("비관적 락 적용")
     void issueWithPessimisticLock_concurrency() throws InterruptedException {
 
         IssueResult result = runConcurrently((couponId, userId) ->
@@ -99,6 +102,36 @@ class CouponIssueConcurrencyTest {
         long issuedRows = issuedCouponRepository.count();
 
         printResult("비관적 락", result, counter, issuedRows);
+
+        assertThat(result.successCount.get()).isEqualTo(TOTAL_QUANTITY);
+        assertThat(result.failCount.get()).isEqualTo(THREAD_COUNT - TOTAL_QUANTITY);
+        assertThat(counter).isEqualTo(TOTAL_QUANTITY);
+        assertThat(issuedRows).isEqualTo(TOTAL_QUANTITY);
+    }
+
+    @Test
+    @DisplayName("Redis + Kafka 적용")
+    void issueWithRedisKafka_concurrency() throws InterruptedException {
+
+        //이벤트 오픈 전 쿠폰 정보를 Redis 에 적재
+        couponRedisIssueService.prepareEvent(couponId);
+
+        IssueResult result = runConcurrently((couponId, userId) ->
+                couponRedisIssueService.issue(couponId, userId));
+
+        //응답은 이미 나갔고, DB 반영은 컨슈머가 비동기 진행 중 → 수렴까지 대기
+        long waitStart = System.currentTimeMillis();
+        long deadline = waitStart + 30_000;
+        while (issuedCouponRepository.count() < TOTAL_QUANTITY && System.currentTimeMillis() < deadline) {
+            Thread.sleep(100);
+        }
+        long convergeMillis = System.currentTimeMillis() - waitStart;
+
+        int counter = couponRepository.findById(couponId).orElseThrow().getIssuedQuantity();
+        long issuedRows = issuedCouponRepository.count();
+
+        printResult("Redis+Kafka", result, counter, issuedRows);
+        System.out.printf("  ㄴ DB 반영 완료: API 응답 후 +%dms (컨슈머 비동기 처리)%n", convergeMillis);
 
         assertThat(result.successCount.get()).isEqualTo(TOTAL_QUANTITY);
         assertThat(result.failCount.get()).isEqualTo(THREAD_COUNT - TOTAL_QUANTITY);
@@ -126,7 +159,15 @@ class CouponIssueConcurrencyTest {
                     result.successCount.incrementAndGet();
                 } catch (Exception e) {
                     result.failCount.incrementAndGet();
-                    result.failReasons.merge(e.getClass().getSimpleName(), 1, Integer::sum);
+                    if (e instanceof CannotAcquireLockException) {
+                        // MySQL 데드락(Error 1213)을 Spring 이 번역한 예외
+                        result.failReasons.merge("데드락", 1, Integer::sum);
+                        Throwable root = e;
+                        while (root.getCause() != null) root = root.getCause();
+                        result.deadlockLog.compareAndSet(null, root.getMessage());
+                    } else {
+                        result.failReasons.merge(e.getMessage(), 1, Integer::sum);
+                    }
                 } finally {
                     latch.countDown();
                 }
@@ -141,20 +182,27 @@ class CouponIssueConcurrencyTest {
     }
 
     private void printResult(String label, IssueResult result, int counter, long issuedRows) {
-        System.out.println("===================================================");
-        System.out.printf("[%s] 동시 요청 %d건 / 선착순 수량 %d장 (%dms)%n",
-                label, THREAD_COUNT, TOTAL_QUANTITY, result.elapsedMillis);
-        System.out.printf("성공 요청 수            : %d%n", result.successCount.get());
-        System.out.printf("실패 요청 수            : %d %s%n", result.failCount.get(), result.failReasons);
-        System.out.printf("발급된 쿠폰 행 수        : %d (issued_coupon count)%n", issuedRows);
-        System.out.printf("쿠폰 카운터             : %d (coupon.issuedQuantity)%n", counter);
-        System.out.println("===================================================");
+        System.out.printf("[%s] 성공 %d / 실패 %d / 발급행 %d / 카운터 %d (%dms)%n",
+                label, result.successCount.get(), result.failCount.get(),
+                issuedRows, counter, result.elapsedMillis);
+
+        if (!result.failReasons.isEmpty()) {
+            String reasons = result.failReasons.entrySet().stream()
+                    .map(entry -> entry.getKey() + " " + entry.getValue() + "건")
+                    .collect(Collectors.joining(", "));
+            System.out.printf("  ㄴ 실패 사유: %s%n", reasons);
+        }
+
+        if (result.deadlockLog.get() != null) {
+            System.out.printf("  ㄴ 데드락 로그: %s%n", result.deadlockLog.get());
+        }
     }
 
     private static class IssueResult {
         AtomicInteger successCount = new AtomicInteger();
         AtomicInteger failCount = new AtomicInteger();
         Map<String, Integer> failReasons = new ConcurrentHashMap<>();
+        AtomicReference<String> deadlockLog = new AtomicReference<>();
         long elapsedMillis;
     }
 }
