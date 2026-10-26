@@ -11,6 +11,8 @@ public interface IssuedCouponRepository extends JpaRepository<IssuedCoupon, Long
 
     boolean existsByCouponIdAndUserId(Long couponId, Long userId);
 
+    long countByCouponId(Long couponId);
+
     @Query("select ic from IssuedCoupon ic join fetch ic.coupon where ic.userId = :userId")
     List<IssuedCoupon> findAllByUserId(@PathParam("userId") Long userId);
 }

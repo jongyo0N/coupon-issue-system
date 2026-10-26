@@ -19,7 +19,9 @@ repositories {
 
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	implementation 'org.springframework.boot:spring-boot-starter-kafka'
 	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
 	compileOnly 'org.projectlombok:lombok'
 	runtimeOnly 'com.mysql:mysql-connector-j'
@@ -33,4 +35,13 @@ dependencies {
 
 tasks.named('test') {
 	useJUnitPlatform()
+	outputs.upToDateWhen { false } // 코드 변경이 없어도 테스트를 항상 재실행 (수치 확인용)
+	testLogging {
+		events 'failed'
+	}
+	// 테스트 System.out 을 '클래스명 > 테스트명 STANDARD_OUT' 헤더 없이 그대로 출력
+	onOutput { descriptor, event ->
+		def msg = event.message.trim()
+		if (msg) logger.lifecycle(msg)
+	}
 }
